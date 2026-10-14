@@ -186,7 +186,7 @@ test('public HTTPS OAuth works with a session despite normalized request.url', a
   assert.equal(begun.status, 200);
   server.backend = async () => Response.json({ connected: true });
   const completed = await callback.GET(request(`/api/oauth/threads/callback?code=one-time-code&state=${state}`, { host: 'workspace.example', cookie: `${sessionCookie}; insauto_oauth_threads=${state}` }), context);
-  assert.equal(completed.headers.get('location'), 'https://workspace.example/?connection=success&platform=threads');
+  assert.equal(completed.headers.get('location'), 'https://workspace.example/connections?connection=success&platform=threads');
 });
 test('batch uploads allow128KiB while ordinary requests remain capped16KiB', async () => {
   const sample = JSON.stringify({ requestId: '00000000-0000-4000-8000-000000000000', posts: Array.from({ length: 12 }, () => ({ platform: 'THREADS', text: '한'.repeat(500), segments: Array(4).fill('한'.repeat(500)), mediaUrl: null })) });

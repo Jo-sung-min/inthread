@@ -1,0 +1,21 @@
+.connections-content { max-width: 1160px; padding-bottom: 48px; }
+.connections-page-heading { margin-bottom: 28px; }
+.connections-page-heading h1 { font-size: 28px; letter-spacing: -1px; margin: 0 0 9px; }
+.connections-page-heading p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.connections-content .connections-section > .section-heading { display: none; }
+.connections-content .connection-cards { gap: 20px; }
+.connections-content .account-card { padding: 26px; border-radius: 12px; }
+.connections-content .account-card h3 { font-size: 17px; }
+.connections-content .account-description { min-height: 38px; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.connections-content .account-connected, .connections-content .account-disconnected { font-size: 12px; }
+.connections-content .account-setup, .connections-content .operator-note { font-size: 12px; line-height: 1.8; }
+.connections-content .operator-note { margin-top: 22px; background: transparent; }
+.connections-content .operator-note summary { color: var(--muted); }
+.connections-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; margin-bottom: 20px; border: 1px solid var(--line); background: #fff; border-radius: 9px; font-size: 13px; line-height: 1.7; }
+@media (max-width: 720px) {
+  .connections-page-heading h1 { font-size: 24px; }
+  .connections-content .connection-cards { grid-template-columns: 1fr; }
+  .connections-content .account-card { padding: 22px; }
+  .connections-content .account-description { min-height: 0; }
+  .connections-content .account-connect { min-height: 44px; font-size: 13px; }
+}

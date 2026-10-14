@@ -3,264 +3,158 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { WorkspaceSidebar } from "@/components/workspace-sidebar";
-import { api, ApiError, Connection, errorMessage, Platform, Post, platformLabel } from "@/lib/client-api";
-import { ConnectionsPanel } from "@/components/connections-panel";
-import { FortunePanel } from "@/components/fortune-panel";
+import { DashboardStatistics } from "@/components/dashboard-statistics";
+import { DraftDialog } from "@/components/draft-dialog";
 import { WorkspaceLogin } from "@/components/workspace-login";
 import { PublishedLink, PublishDialog } from "@/components/publish-dialog";
+import { api, ApiError, Connection, errorMessage, Platform, Post, platformLabel } from "@/lib/client-api";
+import "./dashboard.css";
 
-type Channel = { platform: Platform; name: string; connected: boolean; mode: "DRY_RUN" | "LIVE_AVAILABLE"; textLimit: number; description: string };
 type Activity = { id: string; postId: string; platform: Platform; type: string; message: string; createdAt: string };
-type Dashboard = { posts: Post[]; channels: Channel[]; activity: Activity[]; connections: Connection[]; health: { status: string; mode: "DRY_RUN" | "EXPLICIT_LIVE_PUBLISH" } };
-type IconName = "grid" | "plus" | "arrow" | "clock" | "check" | "bolt" | "code" | "refresh" | "instagram" | "threads" | "file" | "activity" | "close";
-
-function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, React.ReactNode> = {
-    grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
-    plus: <path d="M12 5v14M5 12h14" />,
-    arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
-    clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
-    check: <path d="m5 12 4 4L19 6" />,
-    bolt: <path d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z" />,
-    code: <><path d="m7 7-5 5 5 5m10-10 5 5-5 5m-4-14-2 18" /></>,
-    refresh: <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6 6a8 8 0 0 1 13 3M5 15a8 8 0 0 0 13 3" /></>,
-    instagram: <><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.5" cy="6.5" r=".6" fill="currentColor" /></>,
-    threads: <><path d="M18.5 7.5C17.5 4.5 15.5 3 12 3 6.4 3 4 6.9 4 12s2.4 9 8 9c4.5 0 7.5-2.8 7.5-6.1 0-3.2-3-5.3-7.3-5.3-3 0-4.5 1.5-4.5 3.4 0 1.7 1.1 2.8 3.1 2.8 2.9 0 4.3-2.4 4.3-5.6 0-2.5-1.2-4-3.3-4-1.5 0-2.7.8-3.2 2" /></>,
-    file: <><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" /><path d="M14 3v6h6M8 13h8M8 17h5" /></>,
-    activity: <path d="M2 12h5l3-8 4 16 3-8h5" />,
-    close: <path d="m6 6 12 12M18 6 6 18" />,
-  };
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
-}
-
-const statusLabel = { DRAFT: "초안", SCHEDULED: "시뮬레이션 예약", SIMULATED: "시뮬레이션 완료", PUBLISHING: "실제 게시 처리 중", PUBLISHED: "실제 게시 완료", PUBLISH_FAILED: "게시 실패", PUBLISH_UNKNOWN: "게시 결과 확인 필요", PUBLISH_PARTIAL: "일부 실제 게시 완료" };
-const dateFormat = new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-const formatDate = (value: string) => dateFormat.format(new Date(value));
+type Dashboard = { posts: Post[]; connections: Connection[]; activity: Activity[] };
+const attentionStates = new Set(["PUBLISH_FAILED", "PUBLISH_UNKNOWN", "PUBLISH_PARTIAL"]);
+const statusLabel = { DRAFT: "작성 중", SCHEDULED: "모의 실행 예약", SIMULATED: "모의 실행 완료", PUBLISHING: "게시 중", PUBLISHED: "게시 완료", PUBLISH_FAILED: "게시 실패", PUBLISH_UNKNOWN: "결과 확인 필요", PUBLISH_PARTIAL: "일부 게시됨" };
+const activityLabel: Record<string, string> = { DRAFT_CREATED: "초안 등록", DRAFT_UPDATED: "초안 수정", POST_SCHEDULED: "모의 실행 예약", SCHEDULE_CANCELLED: "예약 취소", DRY_RUN_STARTED: "모의 실행 시작", DRY_RUN_COMPLETED: "모의 실행 완료", SIMULATION_COMPLETED: "모의 실행 완료", PUBLISH_STARTED: "게시 시작", PUBLISH_PART_CONFIRMED: "문단 게시 확인", PUBLISH_CONFIRMED: "게시 완료", PUBLISH_FAILED: "게시 실패", PUBLISH_UNCERTAIN: "게시 결과 확인 필요" };
+const formatDate = (value: string) => new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const previewTitle = (post: Post) => post.text.split("\n").find(line => line.trim()) || "제목 없는 콘텐츠";
 
 export default function Home() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [locked, setLocked] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
-  const [publishTarget, setPublishTarget] = useState<{ post: Post; connection: Connection } | null>(null);
-  const [uncertainPosts, setUncertainPosts] = useState<Set<string>>(new Set());
   const [connectionError, setConnectionError] = useState("");
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"ALL" | Platform>("ALL");
-  const [platform, setPlatform] = useState<Platform>("THREADS");
-  const [text, setText] = useState("");
-  const [mediaUrl, setMediaUrl] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [composer, setComposer] = useState<{ post: Post | null } | null>(null);
+  const [publishTarget, setPublishTarget] = useState<{ post: Post; connection: Connection } | null>(null);
+  const [uncertainPosts, setUncertainPosts] = useState<Set<string>>(new Set());
+  const [channel, setChannel] = useState<"ALL" | Platform>("ALL");
+  const [status, setStatus] = useState<"ALL" | "DRAFT" | "ATTENTION">("ALL");
+  const [query, setQuery] = useState("");
+  const [shown, setShown] = useState(8);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [scheduleTimes, setScheduleTimes] = useState<Record<string, string>>({});
-  const requestSequence = useRef(0);
+  const sequence = useRef(0);
   const actionLock = useRef(false);
-  const textInput = useRef<HTMLTextAreaElement>(null);
-  const errorBox = useRef<HTMLDivElement>(null);
 
   const lockWorkspace = useCallback(() => {
-    setLocked(true);
-    setData(null);
-    setPublishTarget(null);
-    setConnectionError("");
+    sequence.current += 1;
+    setLocked(true); setData(null); setComposer(null); setPublishTarget(null); setConnectionError("");
   }, []);
-
   const refresh = useCallback(async (showLoading = false) => {
-    const sequence = ++requestSequence.current;
+    const current = ++sequence.current;
     if (showLoading) setLoading(true);
     try {
-      const [health, posts, channels, activity, connections, authentication] = await Promise.all([
-        api<Dashboard["health"]>("health"), api<Post[]>("posts"), api<Channel[]>("channels"), api<Activity[]>("activity"), api<Connection[]>("connections"),
+      const [posts, connections, activity, authentication] = await Promise.all([
+        api<Post[]>("posts"), api<Connection[]>("connections"), api<Activity[]>("activity"),
         fetch("/api/auth/status", { cache: "no-store", signal: AbortSignal.timeout(10_000) }).then(response => response.ok ? response.json() as Promise<{ required: boolean }> : { required: false }),
       ]);
-      if (sequence === requestSequence.current) {
-        setData({ health, posts, channels, activity, connections });
-        setAuthRequired(authentication.required);
-        setConnectionError("");
-      }
-    } catch (error) {
-      if (sequence === requestSequence.current) {
-        if (error instanceof ApiError && error.status === 401) lockWorkspace();
-        else setConnectionError(errorMessage(error));
-      }
-    } finally {
-      if (sequence === requestSequence.current) setLoading(false);
-    }
+      if (current !== sequence.current) return;
+      setData({ posts, connections, activity }); setAuthRequired(authentication.required); setConnectionError("");
+    } catch (failure) {
+      if (current !== sequence.current) return;
+      if (failure instanceof ApiError && failure.status === 401) lockWorkspace();
+      else setConnectionError(errorMessage(failure));
+    } finally { if (current === sequence.current) setLoading(false); }
   }, [lockWorkspace]);
-
   useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    if (query.has("connection")) {
-      const name = query.get("platform") === "instagram" ? "Instagram" : "Threads";
-      if (query.get("connection") === "success") setNotice(`${name} 계정 연결을 완료했습니다.`);
-      else setActionError(query.get("reason") === "session" ? "로그인 후 계정 연결을 다시 시작해 주세요." : "계정 연결을 완료하지 못했습니다. 사이트에서 연결하기를 다시 눌러 주세요.");
-      query.delete("connection"); query.delete("platform"); query.delete("reason");
-      window.history.replaceState({}, "", `${window.location.pathname}${query.size ? `?${query}` : ""}${window.location.hash}`);
-    }
+    // Old section bookmarks open the dashboard at its start instead of selecting a scroll-only menu.
+    if (window.location.hash) window.history.replaceState({}, "", window.location.pathname + window.location.search);
+    if (locked) return;
     void refresh(true);
-    const timer = setInterval(() => { void refresh(); }, 15_000);
-    return () => { clearInterval(timer); requestSequence.current += 1; };
-  }, [refresh]);
+    const timer = setInterval(() => void refresh(), 15_000);
+    return () => { clearInterval(timer); sequence.current += 1; };
+  }, [locked, refresh]);
 
-  async function perform(key: string, action: () => Promise<unknown>, success: string) {
+  async function perform(key: string, action: () => Promise<unknown>, message: string) {
     if (actionLock.current) return;
-    actionLock.current = true;
-    setBusy(key);
-    setNotice("");
-    setActionError("");
-    try {
-      await action();
-      setNotice(success);
-      await refresh();
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) lockWorkspace();
-      setActionError(errorMessage(error));
-      requestAnimationFrame(() => errorBox.current?.focus());
-    } finally {
-      actionLock.current = false;
-      setBusy(null);
-    }
-  }
-
-  async function signOut() {
-    if (actionLock.current) return;
-    actionLock.current = true;
-    setBusy("logout");
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(10_000) });
-      if (!response.ok && response.status !== 401) throw new Error("로그아웃하지 못했습니다. 다시 시도해 주세요.");
-      requestSequence.current += 1;
-      resetComposer();
-      lockWorkspace();
-    } catch (error) { setActionError(errorMessage(error)); }
+    actionLock.current = true; setBusy(key); setActionError(""); setNotice("");
+    try { await action(); sequence.current += 1; setNotice(message); await refresh(); }
+    catch (failure) { if (failure instanceof ApiError && failure.status === 401) lockWorkspace(); else setActionError(errorMessage(failure)); }
     finally { actionLock.current = false; setBusy(null); }
   }
-
-  function resetComposer() {
-    setActionError("");
-    setEditingId(null);
-    setText("");
-    setMediaUrl("");
-    setPlatform("THREADS");
+  async function signOut() {
+    await perform("logout", async () => {
+      const response = await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(10_000) });
+      if (!response.ok && response.status !== 401) throw new Error("로그아웃하지 못했습니다.");
+      lockWorkspace();
+    }, "");
   }
-
-  function editDraft(post: Post) {
-    setEditingId(post.id);
-    setPlatform(post.platform);
-    setText(post.text);
-    setMediaUrl(post.mediaUrl || "");
-    setActionError("");
-    setNotice("");
-    textInput.current?.focus();
-    document.getElementById("composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function saved(post: Post) {
+    sequence.current += 1;
+    const edited = !!composer?.post;
+    setData(previous => previous ? { ...previous, posts: [post, ...previous.posts.filter(item => item.id !== post.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) } : previous);
+    setComposer(null); setNotice(edited ? "변경 사항을 저장했습니다." : "초안을 등록했습니다. 내용을 확인하고 발행하세요.");
+    setQuery(""); setChannel("ALL"); setStatus("ALL"); setShown(8);
+    void refresh();
   }
-
-  function loadFortuneCaption(target: Platform, caption: string) {
-    resetComposer();
-    setPlatform(target);
-    setText(caption);
-    setNotice("운세 글을 작성창에 가져왔습니다. 내용을 확인한 뒤 초안으로 저장하세요.");
-    document.getElementById("composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    textInput.current?.focus();
-  }
-
-  async function publishConfirmed() {
+  async function publish() {
     if (!publishTarget || actionLock.current) return;
     const { post, connection } = publishTarget;
-    actionLock.current = true;
-    setBusy(`publish-${post.id}`);
-    setActionError("");
-    setNotice("");
+    actionLock.current = true; setBusy(`publish-${post.id}`); setActionError(""); setNotice("");
     try {
       const result = await api<Post>(`posts/${post.id}/publish`, { accountId: connection.accountId, expectedUpdatedAt: post.updatedAt });
-      if (result.status === "PUBLISHED") setNotice(`${platformLabel(post.platform)}에 실제 게시했습니다.`);
-      else if (result.status === "PUBLISH_FAILED") setActionError(result.publishError || "게시하지 못했습니다. 계정과 콘텐츠 상태를 확인해 주세요.");
+      sequence.current += 1;
+      setData(previous => previous ? { ...previous, posts: previous.posts.map(item => item.id === result.id ? result : item) } : previous);
+      if (result.status === "PUBLISHED") setNotice(`${platformLabel(post.platform)} 게시를 완료했습니다.`);
       else {
-        setUncertainPosts(previous => new Set(previous).add(post.id));
-        setActionError("게시 결과 확인이 필요합니다. 중복 게시하지 말고 연결된 계정에서 결과를 확인해 주세요.");
+        if (result.status !== "PUBLISH_FAILED") setUncertainPosts(previous => new Set(previous).add(post.id));
+        setActionError(result.publishError || "게시 결과를 확인해 주세요. 자동으로 재전송하지 않습니다.");
       }
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) lockWorkspace();
-      if (!(error instanceof ApiError) || error.status >= 500) {
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.status === 401) lockWorkspace();
+      else if (!(failure instanceof ApiError) || failure.status >= 500) {
         setUncertainPosts(previous => new Set(previous).add(post.id));
-        setActionError("게시 결과를 확인하지 못했습니다. 다시 게시하지 말고 연결 계정과 콘텐츠 상태를 확인해 주세요.");
-      } else setActionError(errorMessage(error));
-    } finally {
-      setPublishTarget(null);
-      await refresh();
-      actionLock.current = false;
-      setBusy(null);
-    }
+        setActionError("게시 결과를 확인하지 못했습니다. 다시 발행하기 전에 연결 계정에서 결과를 확인해 주세요.");
+      } else setActionError(errorMessage(failure));
+    } finally { setPublishTarget(null); await refresh(); actionLock.current = false; setBusy(null); }
   }
-
-  const limit = platform === "THREADS" ? 500 : 2200;
-  const characterCount = Array.from(text.trim()).length;
-  const posts = data?.posts ?? [];
-  const visiblePosts = posts.filter(post => filter === "ALL" || post.platform === filter);
+  function togglePost(id: string) { setExpanded(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
+  const posts = data?.posts || [];
   const available = !!data && !connectionError;
-  const counts = [
-    { label: "작성 중인 초안", value: posts.filter(post => post.status === "DRAFT").length, icon: "file" as const, note: "아이디어를 콘텐츠로" },
-    { label: "예약된 콘텐츠", value: posts.filter(post => post.status === "SCHEDULED").length, icon: "clock" as const, note: "예약 시간에 자동 시뮬레이션" },
-    { label: "시뮬레이션 완료", value: posts.filter(post => post.status === "SIMULATED").length, icon: "check" as const, note: "실제 게시 없이 흐름 확인" },
-    { label: "실제 게시 완료", value: posts.filter(post => post.status === "PUBLISHED").length, icon: "arrow" as const, note: "연결된 계정에 공개됨" },
-  ];
+  const visible = posts.filter(post => (channel === "ALL" || post.platform === channel)
+    && (status === "ALL" || (status === "DRAFT" ? post.status === "DRAFT" : attentionStates.has(post.status)))
+    && `${post.text} ${post.segments?.join(" ") || ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const connectedCount = data?.connections.filter(item => item.connected).length || 0;
+  if (locked) return <WorkspaceLogin onSuccess={() => setLocked(false)} />;
 
-  if (locked) return <WorkspaceLogin onSuccess={() => { setLocked(false); void refresh(true); }} />;
-
-  return (
-    <div className="app-shell">
-      <WorkspaceSidebar active="dashboard" />
-
-      <main id="overview">
-        <header className="topbar"><div><span className="breadcrumb">워크스페이스</span><span className="breadcrumb-divider">/</span><strong>오버뷰</strong></div><div className="topbar-actions"><span className="environment"><span />{authRequired ? "PRIVATE WORKSPACE" : "LOCAL WORKSPACE"}</span>{authRequired && <button className="text-button" disabled={busy !== null} onClick={() => void signOut()}>로그아웃</button>}</div></header>
-        <div className="content">
-          <section className="page-heading"><div><span className="eyebrow">LESS REPETITION. MORE CREATION.</span><h1>나의 오늘을,<br className="mobile-break" /> 콘텐츠로.</h1><p>계정을 연결하고, 나만의 오늘 운세를 Instagram과 Threads에 나눠 보세요.</p></div><a href="#composer" className="button primary" onClick={resetComposer}><Icon name="plus" size={18} />새 콘텐츠</a></section>
-
-          <section className="mode-banner" aria-label="현재 운영 모드"><span className="mode-icon"><Icon name="bolt" size={19} /></span><div><strong>실제 게시는 계정과 내용을 확인한 뒤에.</strong><p>계정을 연결한 뒤 실제 게시로 공개할 수 있습니다. 예약과 드라이런은 실제 게시 없이 시뮬레이션으로만 실행됩니다.</p></div><span className="badge dry-run"><span />확인 후 게시</span></section>
-
-          {connectionError && <div className="connection-error" role="alert"><div><strong>백엔드 연결을 확인해 주세요</strong><p>{connectionError}{data ? " 마지막으로 불러온 데이터를 표시하고 있습니다." : " 연결되면 콘텐츠와 채널 상태가 표시됩니다."}</p></div><button className="button secondary" onClick={() => void refresh(true)} disabled={loading}><Icon name="refresh" size={16} />{loading ? "연결 중…" : "다시 연결"}</button></div>}
-          <div className="action-feedback" aria-live="polite">{notice && <div className="success-notice"><Icon name="check" size={17} />{notice}<button className="icon-button" aria-label="알림 닫기" onClick={() => setNotice("")}><Icon name="close" size={16} /></button></div>}</div>
-          {actionError && <div ref={errorBox} className="action-error" role="alert" tabIndex={-1}>{actionError}</div>}
-
-          <section className="metrics metrics-four" aria-label="콘텐츠 현황">{counts.map((item, index) => <article className="metric" key={item.label}><div className="metric-top"><span>{item.label}</span><Icon name={item.icon} size={19} /></div><div className="metric-value">{data ? String(item.value).padStart(2, "0") : "—"}<span>개</span></div><div className="metric-bottom"><span className={`metric-dot metric-dot-${index}`} />{item.note}</div></article>)}</section>
-
-          <ConnectionsPanel connections={data?.connections ?? null} disabled={!available || busy !== null} onChanged={() => refresh()} onUnauthorized={lockWorkspace} />
-          <FortunePanel disabled={!available || busy !== null} onCaption={loadFortuneCaption} onUnauthorized={lockWorkspace} />
-
-          <div className="work-grid">
-            <section className="panel composer-panel" id="composer" aria-labelledby="composer-heading"><div className="panel-heading"><div><span className="eyebrow">{editingId ? "01 / EDIT" : "01 / CREATE"}</span><h2 id="composer-heading">{editingId ? "초안을 다듬어 보세요" : "다음 콘텐츠를 준비하세요"}</h2></div><span className="panel-heading-icon"><Icon name="plus" /></span></div><form onSubmit={event => { event.preventDefault(); void perform(editingId ? "edit" : "create", async () => { if (editingId) { await api<Post>(`posts/${editingId}`, { text: text.trim(), mediaUrl: mediaUrl.trim() || null }, "PATCH"); } else { await api<Post>("posts", { platform, text: text.trim(), ...(mediaUrl.trim() ? { mediaUrl: mediaUrl.trim() } : {}) }); } resetComposer(); textInput.current?.focus(); }, editingId ? "초안 변경 사항을 저장했습니다." : "새 초안을 저장했습니다. 콘텐츠 목록에서 예약하거나 드라이런을 실행하세요."); }}>
-              <fieldset className="platform-fieldset" disabled={busy !== null || editingId !== null}><legend>게시할 채널</legend><div className="platform-picker">{(["THREADS", "INSTAGRAM"] as Platform[]).map(value => <label key={value} className={platform === value ? "platform-option selected" : "platform-option"}><input type="radio" name="platform" value={value} checked={platform === value} onChange={() => setPlatform(value)} /><Icon name={value === "INSTAGRAM" ? "instagram" : "threads"} size={18} />{platformLabel(value)}{platform === value && <span className="option-check"><Icon name="check" size={12} /></span>}</label>)}</div></fieldset>
-              {editingId && <div className="editing-note"><span>초안 수정 중 · 채널은 변경할 수 없습니다.</span><button className="text-button" type="button" disabled={busy !== null} onClick={resetComposer}>수정 취소</button></div>}<div className="field-group"><label htmlFor="post-text">어떤 이야기를 나누고 싶으세요?</label><textarea ref={textInput} id="post-text" placeholder={"오늘의 아이디어를 적어보세요.\n작은 생각이 다음 콘텐츠의 시작이 됩니다."} value={text} onChange={event => setText(event.target.value)} required rows={6} disabled={busy !== null} aria-describedby="text-help" /><div className="field-meta" id="text-help"><span>{platformLabel(platform)} · 앞뒤 공백 제외</span><span className={characterCount > limit ? "over-limit" : ""}>{characterCount.toLocaleString()} / {limit.toLocaleString()}</span></div></div>
-              <div className="field-group"><label htmlFor="media-url">이미지 URL <span className="optional">선택</span></label><input id="media-url" type="url" placeholder="https://example.com/image.jpg" value={mediaUrl} onChange={event => setMediaUrl(event.target.value)} disabled={busy !== null} aria-describedby="media-help" /><p className="field-help" id="media-help">Instagram 실제 게시에는 외부에서 접근 가능한 HTTPS JPEG 이미지 URL이 필요합니다. 예약·드라이런에도 HTTPS URL을 넣어 주세요.</p></div>
-              <div className="composer-footer"><span><Icon name="file" size={15} />초안으로 먼저 저장됩니다</span><button className="button primary" type="submit" disabled={!available || busy !== null || !text.trim() || characterCount > limit}>{busy === "create" || busy === "edit" ? "저장 중…" : editingId ? "변경 저장" : "초안 저장"}<Icon name="arrow" size={17} /></button></div>
-            </form></section>
-
-            <section className="panel workflow-panel" aria-labelledby="workflow-heading"><span className="eyebrow">BUILT FOR YOUR FLOW</span><h2 id="workflow-heading">반복은 줄이고,<br />연결은 더 쉽게.</h2><p className="workflow-intro">내가 만든 콘텐츠도, AI가 만든 초안도.<br />같은 흐름으로 관리하세요.</p><ol className="workflow-steps"><li><span>01</span><div><strong>아이디어를 초안으로</strong><p>채널에 맞는 글과 이미지를 준비하세요.</p></div></li><li><span>02</span><div><strong>시간을 정하고 확인</strong><p>예약·드라이런은 시뮬레이션으로 검증하세요.</p></div></li><li><span>03</span><div><strong>계정을 확인하고 실제 게시</strong><p>연결 계정과 공개할 내용을 직접 확인하세요.</p></div></li></ol><a className="api-link" href="/api/schema" target="_blank" rel="noreferrer"><span><Icon name="code" size={19} />API 명세 살펴보기</span><Icon name="arrow" size={19} /></a><span className="workflow-watermark" aria-hidden="true">a.</span></section>
-          </div>
-
-          <section className="panel pipeline-panel" id="pipeline" aria-labelledby="pipeline-heading"><div className="pipeline-header"><div><span className="eyebrow">02 / MANAGE</span><h2 id="pipeline-heading">콘텐츠 파이프라인 <span className="count-pill">{data ? posts.length : "—"}</span></h2></div><div className="pipeline-tools"><div className="filter-tabs" role="group" aria-label="채널 필터">{(["ALL", "INSTAGRAM", "THREADS"] as const).map(value => <button type="button" key={value} aria-pressed={filter === value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value === "ALL" ? "전체" : platformLabel(value)}</button>)}</div><button type="button" className="icon-button refresh-button" title="새로고침" aria-label="콘텐츠 새로고침" disabled={loading || busy !== null} onClick={() => void refresh(true)}><Icon name="refresh" size={18} /></button></div></div>
-            {visiblePosts.length === 0 ? <div className="empty-state"><div className="empty-icon"><Icon name="file" size={27} /><span><Icon name="plus" size={12} /></span></div><h3>{loading && !data ? "워크스페이스를 불러오고 있어요" : !data ? "백엔드 연결을 기다리고 있어요" : "다음 콘텐츠를 위한 빈자리"}</h3><p>{!data ? "백엔드가 연결되면 저장된 콘텐츠가 여기에 표시됩니다." : filter === "ALL" ? "첫 초안을 만들고, 자동화의 첫 단계를 시작해 보세요." : `${platformLabel(filter)} 초안을 만들면 이곳에서 관리할 수 있어요.`}</p>{data && <a className="text-link" href="#composer">첫 콘텐츠 만들기 <Icon name="arrow" size={16} /></a>}</div> : <div className="post-list">{visiblePosts.map(post => <article className="post-card" key={post.id}><div className="post-top"><span className="post-platform"><Icon name={post.platform === "INSTAGRAM" ? "instagram" : "threads"} size={17} />{platformLabel(post.platform)}</span><span className={`badge post-status ${post.status.toLowerCase()}`}>{statusLabel[post.status]}</span><time dateTime={post.createdAt}>{formatDate(post.createdAt)}</time></div>{post.segments?.length === 4 && <Link className="studio-series-badge dashboard-series-badge" href={`/saju-content?edit=${post.id}`}>4부작 시리즈 · 전체 문단 보기 ↗</Link>}<p className="post-text">{post.text}</p>{post.mediaUrl && <p className="post-media"><span>이미지</span><span>{post.mediaUrl}</span></p>}
-              {post.status === "DRAFT" && <div className="post-actions">{post.segments?.length === 4 ? <Link className="button secondary small" href={`/saju-content?edit=${post.id}`}>4부작 수정</Link> : <button className="button secondary small" type="button" disabled={busy !== null || !available} onClick={() => editDraft(post)}>수정</button>}<div className="schedule-control"><label htmlFor={`schedule-${post.id}`}>예약 시간 <span>(내 기기 시간대)</span></label><input id={`schedule-${post.id}`} type="datetime-local" value={scheduleTimes[post.id] || ""} disabled={busy !== null || !available} onChange={event => setScheduleTimes(previous => ({ ...previous, [post.id]: event.target.value }))} /></div><button type="button" className="button secondary small" disabled={busy !== null || !available || !scheduleTimes[post.id]} onClick={() => void perform(`schedule-${post.id}`, () => { const scheduled = new Date(scheduleTimes[post.id]); if (Number.isNaN(scheduled.getTime()) || scheduled.getTime() <= Date.now()) throw new Error("현재보다 나중인 예약 시간을 선택해 주세요."); return api(`posts/${post.id}/schedule`, { scheduledAt: scheduled.toISOString() }); }, "예약했습니다. 지정된 시간에 시뮬레이션이 자동 실행됩니다.")}><Icon name="clock" size={15} />{busy === `schedule-${post.id}` ? "예약 중…" : "시뮬레이션 예약"}</button><button type="button" className="button soft small" disabled={busy !== null || !available} onClick={() => void perform(`dryrun-${post.id}`, () => api(`posts/${post.id}/dry-run`, {}), "시뮬레이션을 완료했습니다. 실제 Instagram·Threads 계정에는 게시되지 않았습니다.")}><Icon name="bolt" size={15} />{busy === `dryrun-${post.id}` ? "실행 중…" : "드라이런"}</button></div>}
-              {post.status === "DRAFT" && <div className="live-publish-row"><p>{data?.connections.find(item => item.platform === post.platform)?.connected ? "연결된 계정에 실제 공개됩니다. 게시 전에 계정과 내용을 확인하세요." : "실제 게시하려면 위에서 내 계정을 먼저 연결해 주세요."}</p><button className="button live small" disabled={busy !== null || !available || uncertainPosts.has(post.id) || !data?.connections.find(item => item.platform === post.platform)?.connected} onClick={() => { const connection = data?.connections.find(item => item.platform === post.platform); if (connection?.connected && connection.accountId) setPublishTarget({ post, connection }); }}>실제 게시</button></div>}
-              {post.status === "SCHEDULED" && <div className="scheduled-footer"><span><Icon name="clock" size={15} />{post.scheduledAt ? formatDate(post.scheduledAt) : "예약 시간 확인 중"} · 자동 시뮬레이션 예정</span><button type="button" className="text-button" disabled={busy !== null || !available} onClick={() => void perform(`cancel-${post.id}`, () => api(`posts/${post.id}/cancel-schedule`, {}), "예약을 취소했습니다. 콘텐츠가 초안으로 돌아왔습니다.")}>{busy === `cancel-${post.id}` ? "취소 중…" : "예약 취소"}</button></div>}
-              {post.status === "PUBLISHED" && <div className="published-footer"><span><Icon name="check" size={15} />연결 계정에 실제 게시 완료</span><PublishedLink href={post.permalink} platform={post.platform} /></div>}
-              {(post.status === "PUBLISHING" || post.status === "PUBLISH_UNKNOWN" || post.status === "PUBLISH_PARTIAL" || uncertainPosts.has(post.id)) && post.status !== "PUBLISHED" && <div className="publish-uncertain"><strong>{post.status === "PUBLISHING" ? "실제 게시 처리 중" : post.status === "PUBLISH_PARTIAL" ? `일부 게시 완료 · ${post.publishedIds?.length || 0}개 확인` : "게시 결과 확인 필요"}</strong><p>중복 게시를 막기 위해 다시 실행하지 않습니다. 연결된 계정에서 결과를 확인해 주세요.</p></div>}
-              {post.status === "PUBLISH_FAILED" && <div className="publish-uncertain"><strong>실제 게시 실패</strong><p>{post.publishError || "게시하지 못했습니다. 계정과 콘텐츠 상태를 확인해 주세요."}</p></div>}
-              {post.status === "SIMULATED" && <div className="simulated-footer"><Icon name="check" size={15} />실제 게시 없이 시뮬레이션 완료 · {formatDate(post.updatedAt)}</div>}
-            </article>)}</div>}
-          </section>
-
-          <section className="activity-section" id="activity" aria-labelledby="activity-heading"><div className="section-heading"><h2 id="activity-heading">최근 활동</h2><span className="section-caption">최근 50건 · 15초마다 자동 갱신</span></div>{data?.activity.length ? <ol className="activity-list">{data.activity.map(item => <li key={item.id}><span className="activity-mark"><Icon name={item.type.includes("SIMULAT") || item.type.includes("DRY_RUN") ? "check" : item.type.includes("SCHEDULE") ? "clock" : "file"} size={16} /></span><div><p>{item.message}</p><span>{platformLabel(item.platform)}</span></div><time dateTime={item.createdAt}>{formatDate(item.createdAt)}</time></li>)}</ol> : <div className="activity-empty"><Icon name="activity" size={20} /><p>{data ? "콘텐츠를 만들면 이곳에 작업 이력이 차곡차곡 쌓입니다." : "연결 후 최근 활동을 확인할 수 있습니다."}</p></div>}</section>
-          <footer className="page-footer"><span>insauto<span className="brand-dot">.</span> <span className="footer-tagline">만들고, 연결하고, 나아가세요.</span></span><span className="backend-status"><span className={available ? "status-up" : "status-down"} />{available ? "백엔드 연결됨" : loading ? "연결 확인 중" : "백엔드 연결 대기"}</span></footer>
-        </div>
-      </main>
-      {publishTarget && <PublishDialog post={posts.find(post => post.id === publishTarget.post.id) || publishTarget.post} connection={publishTarget.connection} busy={busy !== null} onCancel={() => setPublishTarget(null)} onConfirm={publishConfirmed} />}
+  return <div className="app-shell"><WorkspaceSidebar active="dashboard" /><main className="dashboard-main">
+    <header className="topbar"><strong>내 워크스페이스</strong><div className="topbar-actions"><span className={`workspace-health ${available ? "ready" : ""}`}><i />{available ? "연결됨" : loading ? "불러오는 중" : "연결 확인 필요"}</span>{authRequired && <button className="text-button" disabled={busy !== null} onClick={() => void signOut()}>로그아웃</button>}</div></header>
+    <div className="content dashboard-content">
+      <header className="dashboard-heading"><div><h1>대시보드</h1><p>콘텐츠 현황을 한눈에 확인하세요.</p></div><button className="button primary" disabled={!available || busy !== null} onClick={() => { setComposer({ post: null }); setActionError(""); }}>＋ 콘텐츠 등록</button></header>
+      {connectionError && <div className="connection-error" role="alert"><div><strong>연결을 확인해 주세요</strong><p>{connectionError}</p></div><button className="button secondary small" disabled={loading} onClick={() => void refresh(true)}>다시 불러오기</button></div>}
+      <div aria-live="polite">{notice && <div className="success-notice">{notice}<button className="icon-button" aria-label="알림 닫기" onClick={() => setNotice("")}>×</button></div>}</div>
+      {actionError && <div className="action-error" role="alert">{actionError}</div>}
+      <DashboardStatistics posts={posts} loading={loading && !data} unavailable={!!connectionError || (!loading && !data)} />
+      <div className="dashboard-connections"><span><i className={connectedCount ? "connected-dot" : ""} />연결 계정 <strong>{data ? connectedCount : "—"}/2</strong></span><p>{connectedCount === 2 ? "Instagram과 Threads에 발행할 수 있습니다." : "계정을 연결하면 저장한 콘텐츠를 발행할 수 있어요."}</p><Link href="/connections">계정 관리 ↗</Link></div>
+      <section className="panel content-library" aria-labelledby="library-title">
+        <div className="library-heading"><h2 id="library-title">콘텐츠 <span>{data ? posts.length : "—"}</span></h2><button className="text-button" disabled={loading || busy !== null} onClick={() => void refresh(true)}>{loading ? "불러오는 중…" : "새로고침"}</button></div>
+        <div className="library-toolbar"><div className="library-filters" aria-label="상태 필터">{(["ALL", "DRAFT", "ATTENTION"] as const).map(value => <button key={value} type="button" aria-pressed={status === value} onClick={() => { setStatus(value); setShown(8); }}>{value === "ALL" ? "전체" : value === "DRAFT" ? "작성 중" : "확인 필요"}</button>)}</div><div className="library-search"><label className="sr-only" htmlFor="content-search">콘텐츠 검색</label><input id="content-search" type="search" placeholder="내용 검색" value={query} onChange={event => { setQuery(event.target.value); setShown(8); }} /><label className="sr-only" htmlFor="channel-filter">채널 필터</label><select id="channel-filter" value={channel} onChange={event => { setChannel(event.target.value as "ALL" | Platform); setShown(8); }}><option value="ALL">모든 채널</option><option value="THREADS">Threads</option><option value="INSTAGRAM">Instagram</option></select></div></div>
+        {!visible.length ? <div className="library-empty"><span aria-hidden="true">▤</span><h3>{!data ? "콘텐츠를 불러오는 중입니다" : posts.length ? "조건에 맞는 콘텐츠가 없어요" : "첫 콘텐츠를 등록해 보세요"}</h3><p>{!data ? "연결 후 저장된 콘텐츠가 표시됩니다." : posts.length ? "검색어나 필터를 바꿔 보세요." : "직접 글을 쓰거나 사주 콘텐츠를 만들어 시작할 수 있어요."}</p>{data && !posts.length && <div><button className="button secondary small" disabled={!available} onClick={() => setComposer({ post: null })}>직접 등록</button><Link className="text-link" href="/saju-content">사주 콘텐츠 만들기 ↗</Link></div>}</div> : <div className="library-rows">{visible.slice(0, shown).map(post => {
+          const account = data?.connections.find(item => item.platform === post.platform);
+          const isSeries = post.segments?.length === 4;
+          const canPublish = post.status === "DRAFT" && account?.connected && account.accountId && !uncertainPosts.has(post.id) && (post.platform !== "INSTAGRAM" || !!post.mediaUrl);
+          return <article className="library-item" key={post.id}>
+            <div className="library-row"><button className="library-title-button" aria-expanded={expanded.has(post.id)} aria-controls={`content-${post.id}`} onClick={() => togglePost(post.id)}><span className={`library-channel ${post.platform.toLowerCase()}`}>{post.platform === "INSTAGRAM" ? "◎" : "@"}</span><span><strong>{previewTitle(post)}</strong><small>{platformLabel(post.platform)}{isSeries ? " · 4부작" : ""} · {formatDate(post.createdAt)}</small></span></button><span className={`badge post-status ${post.status.toLowerCase()}`}>{statusLabel[post.status]}</span><div className="library-actions">{post.status === "DRAFT" ? <>{isSeries ? <Link className="text-button" href={`/saju-content?edit=${post.id}`}>수정</Link> : <button className="text-button" disabled={busy !== null || !available || uncertainPosts.has(post.id)} onClick={() => setComposer({ post })}>수정</button>}<button className="button live small" disabled={busy !== null || !available || !canPublish} title={!account?.connected ? "계정 연결 후 발행할 수 있습니다" : post.platform === "INSTAGRAM" && !post.mediaUrl ? "이미지 주소를 추가해 주세요" : "전체 내용을 확인한 뒤 실제로 게시합니다"} onClick={() => { if (account && canPublish) setPublishTarget({ post, connection: account }); }}>발행</button></> : <PublishedLink href={post.permalink} platform={post.platform} />}</div></div>
+            {expanded.has(post.id) && <div className="library-detail" id={`content-${post.id}`}>
+              {(post.segments?.length ? post.segments : [post.text]).map((part, index) => <p className="library-full-text" key={index}>{part}</p>)}
+              {post.mediaUrl && <p className="library-media">이미지 · {post.mediaUrl}</p>}
+              {post.publishedIds?.length ? <p className="library-receipts">게시 확인 {post.publishedIds.length}개 · {post.publishedIds.join(", ")}</p> : null}
+              {(attentionStates.has(post.status) || uncertainPosts.has(post.id)) && post.status !== "PUBLISHED" && <p className="library-warning">{post.publishError || "게시 결과를 연결 계정에서 확인해 주세요. 자동으로 재전송하지 않습니다."}</p>}
+              {post.status === "PUBLISHING" && <p className="library-note">게시 중 · {post.publishedIds?.length || 0}/{isSeries ? 4 : 1}개 확인 · 15초마다 갱신됩니다.</p>}
+              {post.status === "DRAFT" && <details className="simulation-options"><summary>모의 실행 옵션</summary><p>예약과 모의 실행은 실제 계정에 게시하지 않습니다.</p><div><label htmlFor={`schedule-${post.id}`}>예약 시간 <small>기기 시간대</small></label><input type="datetime-local" id={`schedule-${post.id}`} value={scheduleTimes[post.id] || ""} disabled={busy !== null || !available} onChange={event => setScheduleTimes(previous => ({ ...previous, [post.id]: event.target.value }))} /><button className="button secondary small" disabled={busy !== null || !available || !scheduleTimes[post.id]} onClick={() => void perform(`schedule-${post.id}`, () => { const date = new Date(scheduleTimes[post.id]); if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw new Error("현재보다 나중인 시간을 선택해 주세요."); return api(`posts/${post.id}/schedule`, { scheduledAt: date.toISOString() }); }, "모의 실행을 예약했습니다.")}>모의 실행 예약</button><button className="text-button" disabled={busy !== null || !available} onClick={() => void perform(`dryrun-${post.id}`, () => api(`posts/${post.id}/dry-run`, {}), "모의 실행을 완료했습니다. 실제로 게시하지 않았습니다.")}>지금 모의 실행</button></div></details>}
+              {post.status === "SCHEDULED" && <div className="library-scheduled"><span>{post.scheduledAt && formatDate(post.scheduledAt)} · 모의 실행 예정</span><button className="text-button" disabled={busy !== null || !available} onClick={() => void perform(`cancel-${post.id}`, () => api(`posts/${post.id}/cancel-schedule`, {}), "예약을 취소했습니다.")}>예약 취소</button></div>}
+            </div>}
+          </article>;
+        })}</div>}
+        {visible.length > shown && <button className="library-more" onClick={() => setShown(previous => previous + 8)}>더 보기 · {shown}/{visible.length}</button>}
+      </section>
+      <details className="dashboard-activity"><summary>최근 활동 <span>{data?.activity.length || 0}</span></summary>{data?.activity.length ? <ol>{data.activity.map(item => <li key={item.id}><span><strong>{activityLabel[item.type] || "콘텐츠 상태 변경"}</strong><small>{platformLabel(item.platform)}</small></span><time dateTime={item.createdAt}>{formatDate(item.createdAt)}</time></li>)}</ol> : <p>아직 활동이 없습니다.</p>}</details>
+      <footer className="dashboard-footer"><span>한국 시간 기준 · 15초마다 갱신</span><span>등록·발행 기록 기준 통계</span></footer>
     </div>
-  );
+    {composer && <DraftDialog post={composer.post} onClose={() => setComposer(null)} onSaved={saved} onUnauthorized={lockWorkspace} />}
+    {publishTarget && <PublishDialog post={posts.find(post => post.id === publishTarget.post.id) || publishTarget.post} connection={publishTarget.connection} busy={busy !== null} onCancel={() => setPublishTarget(null)} onConfirm={publish} />}
+  </main></div>;
 }
-
-
-
-
-

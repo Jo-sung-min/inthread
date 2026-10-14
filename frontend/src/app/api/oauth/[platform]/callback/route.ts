@@ -11,7 +11,7 @@ export async function GET(request: NextRequest, context: Context) {
   const origin = requestOrigin(request);
   if (!origin) return problem(403, "허용되지 않은 워크스페이스 주소입니다.");
   const finish = (success: boolean, reason?: string) => {
-    const target = new URL("/", origin);
+    const target = new URL("/connections", origin);
     target.searchParams.set("connection", success ? "success" : "error");
     target.searchParams.set("platform", platform);
     if (reason) target.searchParams.set("reason", reason);
