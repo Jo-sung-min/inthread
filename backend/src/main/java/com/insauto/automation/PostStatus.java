@@ -1,0 +1,3 @@
+package com.insauto.automation;
+
+public enum PostStatus { DRAFT, SCHEDULED, SIMULATED, PUBLISHING, PUBLISHED, PUBLISH_FAILED, PUBLISH_UNKNOWN, PUBLISH_PARTIAL }

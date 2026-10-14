@@ -1,0 +1,689 @@
+openapi: 3.1.0
+info:
+  title: InsAuto Automation API
+  version: 0.3.0
+  description: >-
+    Instagram and Threads drafts, personal daily fortune previews, template-based four-part saju content,
+    OAuth connections and explicit real publication. Content generation never saves or publishes a post.
+    Only the publish operation sends a post to Meta. Scheduling and dry-run operations remain simulations;
+    SIMULATED never means published. Inspect connections before publishing. Configure Bearer authentication
+    with INSAUTO_API_KEY. X-API-Key is also supported for application clients.
+    Replace the localhost server URL with your HTTPS deployment URL before importing into GPT Actions.
+servers:
+  - url: http://localhost:8081
+    description: Local development; replace with your public HTTPS URL for GPT Actions
+security:
+  - BearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      operationId: getAutomationHealth
+      summary: Check service health and execution mode
+      description: Returns liveness and EXPLICIT_LIVE_PUBLISH capability. Does not verify database or account connectivity; use connections for account availability. Scheduling remains simulation-only.
+      security: []
+      responses:
+        '200':
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, mode]
+                properties:
+                  status: { type: string, const: UP }
+                  mode: { type: string, const: EXPLICIT_LIVE_PUBLISH }
+  /api/v1/channels:
+    get:
+      operationId: listAutomationChannels
+      summary: List supported platforms and capabilities
+      description: Lists Instagram and Threads, text limits, and current account connectivity. LIVE_AVAILABLE means a connected account can be explicitly published to; scheduled posts remain simulations.
+      responses:
+        '200':
+          description: Supported platforms
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/connections:
+    get:
+      operationId: listSocialConnections
+      summary: Inspect account connections and OAuth setup readiness
+      description: Returns one connection view for each supported platform, including the exact account ID needed for real publishing. No access token or app secret is returned.
+      responses:
+        '200':
+          description: Platform connection state
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Connection' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/connections/{platform}/oauth/start:
+    post:
+      operationId: startSocialAccountOAuth
+      summary: Start the website account authorization flow
+      description: >-
+        Intended for the trusted website server route. The website binds the returned one-time state to
+        the initiating browser cookie and redirects the user to authorizationUrl. Never expose app
+        credentials or ask users to paste tokens. MCP does not expose this operation. OAuth connects
+        a social account; it does not authenticate users to this single-workspace service.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/ConnectionPlatform'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Authorization redirect and state for the trusted website handler
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationUrl, state]
+                properties:
+                  authorizationUrl: { type: string, format: uri }
+                  state: { type: string, description: One-time state to bind to the initiating browser; do not log. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/v1/connections/{platform}/oauth/complete:
+    post:
+      operationId: completeSocialAccountOAuth
+      summary: Complete a browser-bound account authorization
+      description: >-
+        Called only by the trusted website callback after matching state to the initiating browser cookie.
+        Exchanges the one-use authorization code server-side, verifies account identity, and stores the
+        token encrypted. Neither code nor state is a reusable credential. Do not log them or automatically
+        repeat this operation. MCP clients must use the website connection flow.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/ConnectionPlatform'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, state]
+              properties:
+                code: { type: string, minLength: 1, maxLength: 4096 }
+                state: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        '200':
+          description: Verified account connection without credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Connection' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/ProviderError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/v1/connections/{platform}:
+    delete:
+      operationId: disconnectSocialAccount
+      summary: Remove a platform connection from this workspace
+      description: Deletes locally stored account credentials. Does not delete external posts or revoke all platform permissions. Use the platform settings to revoke the app's authorization.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/ConnectionPlatform'
+      responses:
+        '204': { description: Connection removed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/fortunes/preview:
+    post:
+      operationId: previewDailyFortune
+      summary: Compute a personal daily fortune without saving birth input
+      description: >-
+        Read-only computation despite POST: it neither persists birth data nor creates a draft or publishes.
+        Pass birthDate as a string in the selected calendar, since a valid lunar date such as February 30
+        may not be a valid Gregorian date. The backend validates and converts the calendar, computes the
+        chart and returns today's Korean date, its calculation basis, entertainment notice, and platform text.
+        Do not guess unknown birth times or include raw birth input in public posts without user intent.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FortuneRequest' }
+      responses:
+        '200':
+          description: Personal fortune preview; response is Cache-Control no-store
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FortunePreview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/content-studio/options:
+    get:
+      operationId: getContentOptions
+      summary: List supported content topics, devices and tones
+      description: Read this catalog before generating content. IDs are backend-owned options, not freeform prompts.
+      responses:
+        '200':
+          description: Current content catalog and maximum batch size
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContentOptions' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/content-studio/generate:
+    post:
+      operationId: generateSajuContent
+      summary: Generate four-part saju content previews without saving or publishing
+      description: >-
+        Read-only template computation despite POST. This is a TEMPLATE generator, not an external AI model
+        or an individual birth-chart calculation. Return the notice with the generated content.
+        Each item contains four ordered Threads texts and one combined Instagram caption.
+        Call draft creation separately after reviewing content; generation never starts publication.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerateContentRequest' }
+      responses:
+        '200':
+          description: Generated previews, not saved drafts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeneratedContent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/posts:
+    get:
+      operationId: listPosts
+      summary: List saved posts
+      description: Returns all posts in newest-created-first order. SIMULATED posts were never published to Meta.
+      responses:
+        '200':
+          description: Saved posts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Post' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createDraft
+      summary: Create a draft for Instagram or Threads
+      description: Saves a new draft. Repeated calls create separate drafts; use posts/batch with a stable requestId for idempotent saving. Optional segments create a four-part Threads reply chain with text equal to the first part. Never publishes.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePost' }
+      responses:
+        '201': { $ref: '#/components/responses/PostResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/posts/batch:
+    post:
+      operationId: createDraftBatch
+      summary: Atomically save an idempotent batch of one to twelve drafts
+      description: >-
+        Saves all drafts in one transaction or none if validation fails. Does not publish or schedule.
+        Use a stable requestId UUID for this logical save. Repeating the same requestId and identical
+        payload returns the same saved post IDs in input order; a different payload with that ID conflicts.
+        Preserve the requestId and exact payload when resolving a lost response; do not automatically
+        generate a new key. Replayed results reflect the current state of those saved posts.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [requestId, posts]
+              properties:
+                requestId: { type: string, format: uuid }
+                posts:
+                  type: array
+                  minItems: 1
+                  maxItems: 12
+                  items: { $ref: '#/components/schemas/CreatePost' }
+      responses:
+        '201':
+          description: Saved batch, including replay of the same request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [posts]
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/posts/{id}:
+    patch:
+      operationId: updateDraft
+      summary: Replace a draft's text and media URL
+      description: Requires DRAFT status. Replaces text and media URL; omitted or null mediaUrl clears it. Four segments fully replace a Threads series. Omitting segments preserves other parts while text replaces the first; an empty array converts the series to a single post. Platform is immutable. Omit segments for Instagram.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 2200
+                  description: Complete replacement text; Threads has a stricter 500-character limit.
+                mediaUrl:
+                  type: [string, 'null']
+                  format: uri
+                  maxLength: 2048
+                  description: Replacement public HTTPS image URL. Omit or pass null to clear the existing URL.
+                segments: { $ref: '#/components/schemas/DraftSegments' }
+      responses:
+        '200': { $ref: '#/components/responses/PostResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/posts/{id}/schedule:
+    post:
+      operationId: schedulePostDryRun
+      summary: Schedule a draft for a future simulation
+      description: Requires DRAFT and a future timestamp with UTC offset. Instagram requires an image URL. The scheduler runs about every 15 seconds and changes due posts to SIMULATED, without publishing.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scheduledAt]
+              properties:
+                scheduledAt: { type: string, format: date-time, example: '2030-01-01T09:00:00+09:00' }
+      responses:
+        '200': { $ref: '#/components/responses/PostResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/posts/{id}/cancel-schedule:
+    post:
+      operationId: cancelPostSchedule
+      summary: Return a scheduled post to draft
+      description: Requires SCHEDULED status. Cancels a pending simulation and clears scheduledAt. An already simulated post cannot be cancelled.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200': { $ref: '#/components/responses/PostResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/posts/{id}/dry-run:
+    post:
+      operationId: simulateDraft
+      summary: Simulate a draft immediately
+      description: Requires DRAFT status and an image URL for Instagram. Stores SIMULATED and an activity entry. Does not contact Meta or publish. This transition can execute only once per post.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200': { $ref: '#/components/responses/PostResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/posts/{id}/publish:
+    post:
+      operationId: publishPost
+      summary: Publish the approved draft to the exact connected account now
+      description: >-
+        Real external publication, requiring explicit user approval of ALL final segments, image and target account.
+        Read the current draft and connections first. accountId must match the current connection and
+        expectedUpdatedAt must equal the draft's exact updatedAt, preventing silent account or content changes.
+        Requires DRAFT; Instagram additionally requires a publicly reachable JPEG image URL.
+        A Threads series publishes sequentially as a four-part reply chain; earlier public parts cannot
+        be rolled back by this operation. PUBLISHING is saved before publication, and each confirmed ID
+        is saved durably in ordered publishedIds before starting the next part. Inspect the returned status:
+        PUBLISHED confirms all parts, PUBLISH_FAILED means preparation failed before any confirmed publication,
+        PUBLISH_PARTIAL means some parts are public and a later part failed before its publish call, and
+        PUBLISH_UNKNOWN means the last external result may have succeeded. A missing permalink does not
+        negate known successful IDs. publishedId and permalink refer to the root post.
+        Never automatically retry a failed, timed-out or uncertain publication. Check saved status and the
+        target platform manually first. Allow a 360-second client timeout. Scheduling remains DRY_RUN.
+      x-openai-isConsequential: true
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountId, expectedUpdatedAt]
+              properties:
+                accountId:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: Exact Meta account ID from connections explicitly approved by the user.
+                expectedUpdatedAt:
+                  type: string
+                  format: date-time
+                  description: Exact current draft updatedAt; preserve fractional precision and explicit offset.
+      responses:
+        '200': { $ref: '#/components/responses/PostResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/ProviderError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/v1/activity:
+    get:
+      operationId: listRecentActivity
+      summary: List the 50 most recent activity entries
+      description: Returns persisted activity newest first. DRY_RUN_COMPLETED means simulation only, never a published post.
+      responses:
+        '200':
+          description: Recent activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Activity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Use INSAUTO_API_KEY as the Bearer token. Local development defaults to local-dev-key.
+  parameters:
+    PostId:
+      name: id
+      in: path
+      required: true
+      description: UUID returned when the draft was created.
+      schema: { type: string, format: uuid }
+    ConnectionPlatform:
+      name: platform
+      in: path
+      required: true
+      description: Social platform whose connection is being managed.
+      schema: { $ref: '#/components/schemas/Platform' }
+  responses:
+    PostResponse:
+      description: Saved post state
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Post' }
+    BadRequest:
+      description: Invalid input, timestamp, platform text limit, or missing required image URL
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Post does not exist
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Operation conflicts with state, draft version, account identity or connection configuration. Inspect the structured code and do not blindly repeat mutations.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProviderError:
+      description: Meta request failed. Publication may require manual result verification before any further action; never automatically repeat the publish operation.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: Required OAuth or credential storage configuration is unavailable.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Platform:
+      type: string
+      enum: [INSTAGRAM, THREADS]
+    SeriesSegments:
+      type: array
+      minItems: 4
+      maxItems: 4
+      description: Exactly four ordered Threads texts. First text must equal the post text. Omit for Instagram or a single post.
+      items:
+        type: string
+        minLength: 1
+        maxLength: 500
+        description: Nonblank part with at most 500 Unicode code points.
+    DraftSegments:
+      description: Four ordered Threads texts or an empty array for a single post. On update an empty array clears the series; omission preserves the other parts while text updates the first.
+      oneOf:
+        - $ref: '#/components/schemas/SeriesSegments'
+        - type: array
+          maxItems: 0
+          items: { type: string }
+    CreatePost:
+      type: object
+      required: [platform, text]
+      properties:
+        platform: { $ref: '#/components/schemas/Platform' }
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2200
+          description: Nonblank text; Threads has a stricter 500-code-point limit. Must equal the first segment when segments are present.
+        mediaUrl:
+          type: [string, 'null']
+          format: uri
+          maxLength: 2048
+          description: Optional HTTPS image URL on a public DNS domain. No IP literals, credentials, fragments, or custom ports. Used only on the root part of a Threads series. Not fetched or verified when saving.
+        segments: { $ref: '#/components/schemas/DraftSegments' }
+    Post:
+      type: object
+      required: [id, platform, text, mediaUrl, status, scheduledAt, createdAt, updatedAt, publishedId, publishedAccountId, permalink, publishError, segments, publishedIds]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { $ref: '#/components/schemas/Platform' }
+        text: { type: string }
+        segments:
+          type: array
+          maxItems: 4
+          items: { type: string }
+          description: Four ordered texts for a Threads series; empty for a single post. Review all parts before publication.
+        publishedIds:
+          type: array
+          maxItems: 4
+          items: { type: string }
+          description: Ordered, durably confirmed external post IDs. Empty before confirmation; may be nonempty in PUBLISHING, PUBLISH_PARTIAL or PUBLISH_UNKNOWN.
+        mediaUrl: { type: [string, 'null'], format: uri }
+        status:
+          type: string
+          enum: [DRAFT, SCHEDULED, SIMULATED, PUBLISHING, PUBLISHED, PUBLISH_FAILED, PUBLISH_PARTIAL, PUBLISH_UNKNOWN]
+          description: SIMULATED never indicates publication. PUBLISHED confirms every part. PUBLISH_PARTIAL has some confirmed public parts; PUBLISH_UNKNOWN may have an additional unconfirmed public part. Never automatically retry either.
+        scheduledAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        publishedId: { type: [string, 'null'], description: Root external media ID confirmed by Meta; null before known success. A root ID alone does not confirm a complete series. }
+        publishedAccountId: { type: [string, 'null'], description: Intended or confirmed external account ID for the real publication attempt. }
+        permalink: { type: [string, 'null'], format: uri, description: Published post URL if retrieved; a null URL does not invalidate a confirmed publishedId. }
+        publishError: { type: [string, 'null'], description: Safe publication error or manual-check explanation; never includes access credentials. }
+    Activity:
+      type: object
+      required: [id, postId, platform, type, message, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        postId: { type: string, format: uuid }
+        platform: { $ref: '#/components/schemas/Platform' }
+        type: { type: string, enum: [DRAFT_CREATED, DRAFT_UPDATED, POST_SCHEDULED, SCHEDULE_CANCELLED, DRY_RUN_COMPLETED, PUBLISH_STARTED, PUBLISH_PART_CONFIRMED, PUBLISH_CONFIRMED, PUBLISH_FAILED, PUBLISH_UNCERTAIN] }
+        message: { type: string }
+        createdAt: { type: string, format: date-time }
+    Channel:
+      type: object
+      required: [platform, name, connected, mode, textLimit, description]
+      properties:
+        platform: { $ref: '#/components/schemas/Platform' }
+        name: { type: string }
+        connected: { type: boolean }
+        mode: { type: string, enum: [DRY_RUN, LIVE_AVAILABLE] }
+        textLimit: { type: integer, enum: [500, 2200] }
+        description: { type: string }
+    Connection:
+      type: object
+      required: [platform, connected, username, accountId, expiresAt, oauthConfigured, configurationMessage]
+      properties:
+        platform: { $ref: '#/components/schemas/Platform' }
+        connected: { type: boolean, description: True when a usable account connection is present. }
+        username: { type: [string, 'null'] }
+        accountId: { type: [string, 'null'], description: Exact account identifier to bind an explicitly approved publication. }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        oauthConfigured: { type: boolean, description: Whether the operator supplied the required OAuth configuration. }
+        configurationMessage: { type: [string, 'null'], description: Actionable setup message containing no credentials. }
+    ContentOption:
+      type: object
+      required: [id, label, description]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        description: { type: string }
+    ContentOptions:
+      type: object
+      required: [topics, devices, tones, maxBatchSize]
+      properties:
+        topics:
+          type: array
+          items: { $ref: '#/components/schemas/ContentOption' }
+        devices:
+          type: array
+          items: { $ref: '#/components/schemas/ContentOption' }
+        tones:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: { type: string, enum: [DIRECT, WARM] }
+              label: { type: string }
+        maxBatchSize: { type: integer, const: 12 }
+    GenerateContentRequest:
+      type: object
+      required: [topicIds, count, tone, devices, cta]
+      properties:
+        topicIds:
+          type: array
+          minItems: 1
+          maxItems: 9
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 40 }
+          description: Supported topic IDs from content-studio/options. Do not invent values.
+        count: { type: integer, minimum: 1, maximum: 12 }
+        tone: { type: string, enum: [DIRECT, WARM] }
+        devices:
+          type: array
+          maxItems: 5
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 40 }
+          description: Supported rhetorical device IDs from content-studio/options; empty array is allowed.
+        cta: { type: string, enum: [COMMENT, SAVE] }
+    GeneratedContent:
+      type: object
+      required: [generator, generatedAt, items, notice]
+      properties:
+        generator: { type: string, const: TEMPLATE, description: Template generator; no external AI model is called. }
+        generatedAt: { type: string, format: date-time }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            type: object
+            required: [id, topicId, title, segments, instagramCaption, devices, tone]
+            properties:
+              id: { type: string, format: uuid, description: Preview item ID, not a saved post ID. }
+              topicId: { type: string }
+              title: { type: string }
+              segments: { $ref: '#/components/schemas/SeriesSegments' }
+              instagramCaption: { type: string, maxLength: 2200, description: Combined caption; saving or publication is separate. }
+              devices:
+                type: array
+                items: { type: string }
+              tone: { type: string, enum: [DIRECT, WARM] }
+        notice: { type: string, description: Preserve the entertainment and template interpretation notice when presenting the preview. }
+    FortuneRequest:
+      type: object
+      required: [birthDate, calendarType]
+      properties:
+        birthDate:
+          type: string
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          description: Date in the selected calendar, not a Gregorian date type; lunar February 30 may be valid. The backend performs calendar validation.
+          example: '1990-02-15'
+        birthTime:
+          type: [string, 'null']
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+          description: Birth time in HH:mm; omit or null when unknown. Do not guess.
+          example: '14:30'
+        calendarType: { type: string, enum: [SOLAR, LUNAR] }
+        leapMonth: { type: boolean, default: false, description: True only for a lunar leap month; SOLAR requires false. }
+    FortunePreview:
+      type: object
+      required: [date, basis, notice, chart, reading, instagramText, threadsText]
+      properties:
+        date: { type: string, format: date, description: Current day in Asia/Seoul. }
+        basis: { type: string, description: Calculation assumptions and supported calendar convention. }
+        notice: { type: string, description: Entertainment and interpretation notice; preserve when presenting the reading. }
+        chart:
+          type: object
+          required: [year, month, day, hour, dayElement]
+          properties:
+            year: { type: string }
+            month: { type: string }
+            day: { type: string }
+            hour: { type: [string, 'null'] }
+            dayElement: { type: string }
+        reading:
+          type: object
+          required: [overall, relationship, work, money, action]
+          properties:
+            overall: { type: string }
+            relationship: { type: string }
+            work: { type: string }
+            money: { type: string }
+            action: { type: string }
+        instagramText: { type: string, description: Suggested Instagram caption; not yet a saved draft or a published post. }
+        threadsText: { type: string, description: Suggested Threads text; not yet a saved draft or a published post. }
+    Problem:
+      type: object
+      required: [type, title, status, detail, instance, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        errors:
+          type: object
+          additionalProperties: { type: string }

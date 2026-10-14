@@ -1,0 +1,28 @@
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8081}
+  error:
+    include-message: never
+    include-stacktrace: never
+spring:
+  application:
+    name: insauto-backend
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./data/insauto;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${DATABASE_USERNAME:sa}
+    password: ${DATABASE_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: always
+insauto:
+  api-key: ${INSAUTO_API_KEY:local-dev-key}
+  scheduler:
+    enabled: ${INSAUTO_SCHEDULER_ENABLED:true}
+    interval-ms: ${INSAUTO_SCHEDULER_INTERVAL_MS:15000}

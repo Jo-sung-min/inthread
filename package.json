@@ -1,0 +1,20 @@
+{
+  "name": "insauto",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Instagram and Threads automation workspace for people and AI agents",
+  "workspaces": ["frontend", "packages/*"],
+  "engines": { "node": ">=22" },
+  "packageManager": "npm@11.16.0",
+  "scripts": {
+    "dev": "node scripts/workspace.mjs dev",
+    "dev:frontend": "node scripts/workspace.mjs frontend",
+    "dev:backend": "node scripts/workspace.mjs backend",
+    "build": "node scripts/workspace.mjs build",
+    "typecheck": "npm run typecheck --workspace frontend",
+    "test": "node scripts/workspace.mjs test",
+    "test:backend": "node scripts/workspace.mjs backend-test",
+    "test:mcp": "npm test --workspace @insauto/mcp-server",
+    "mcp": "node scripts/workspace.mjs mcp"
+  }
+}
